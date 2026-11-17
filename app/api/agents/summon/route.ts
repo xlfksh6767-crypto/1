@@ -11,6 +11,7 @@ import {
   hasGeminiKey,
 } from "@/lib/gemini";
 import { readJson, str } from "@/lib/api-helpers";
+import { WEB_SEARCH_PROVIDERS } from "@/lib/web-search";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,7 @@ export async function GET() {
     geminiConfigured: hasGeminiKey(),
     models: GEMINI_MODELS,
     googleSearch: GOOGLE_SEARCH_ENABLED,
+    webSearch: { enabled: true, providers: WEB_SEARCH_PROVIDERS },
     defaultPersona: DEFAULT_PERSONA,
     personas: PERSONA_KEYS.map((key) => ({
       key,

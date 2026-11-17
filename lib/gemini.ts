@@ -1,3 +1,5 @@
+import { buildSearchQuery, searchWeb, type WebSearchResult } from "./web-search";
+
 /**
  * Gemini 호출 도우미.
  * GEMINI_API_KEY 가 설정되어 있지 않으면 null 을 돌려주고,
@@ -35,12 +37,16 @@ const GEMINI_TOTAL_BUDGET_MS = 9500;
 /** 남은 예산이 이보다 적으면 새 시도를 시작하지 않습니다. */
 const MIN_ATTEMPT_MS = 1200;
 
-/** 그라운딩이 실제로 돌았는지 응답에 함께 실어 보내는 요약. */
+/** 검색이 실제로 돌았는지 응답에 함께 실어 보내는 요약. */
 export interface SearchInfo {
   used: boolean;
+  /** google = Gemini 그라운딩, duckduckgo/bing = 사이트가 직접 긁어온 웹 검색. */
+  provider: "google" | "duckduckgo" | "bing" | "none";
   model: string;
+  query?: string;
   queries: string[];
   sources: Array<{ title: string; uri: string }>;
+  ms?: number;
   /** 검색이 안 됐다면 그 이유(짧게). */
   note?: string;
 }
@@ -246,18 +252,45 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 
   const now = seoulNow();
 
-  /** 지금 이 요청에 Google 검색 도구가 붙어 있는지에 따라 규칙이 달라집니다. */
-  const searchRules = (searchEnabled: boolean) =>
-    searchEnabled
-      ? [
-          "- Google 검색 도구로 실시간 정보를 확인할 수 있습니다. 날씨, 뉴스, 경기 결과, 공연·행사, 시험 일정, 가격, 환율처럼 지금 시점에 따라 달라지는 것은 검색으로 확인한 내용만 말합니다.",
-          "- 검색해서 확인한 사실을 말할 때는 '검색해 보니'처럼 검색으로 확인했다는 점을 자연스럽게 밝히고, 출처 URL은 본문에 쓰지 않습니다.",
-          "- 검색으로 확인하지 못한 날짜나 숫자는 절대 추측해서 지어내지 않습니다. 확인하지 못했으면 '검색으로는 확인하지 못했어요'라고 밝힙니다.",
-        ]
-      : [
-          "- 지금 이 요청에는 Google 검색 도구가 붙어 있지 않습니다. 실시간 정보를 확인했다고 말하면 안 됩니다. '검색해 보니' 같은 표현을 절대 쓰지 않습니다.",
-          "- 날씨, 뉴스, 경기 결과, 일정, 가격처럼 지금 시점에 따라 달라지는 것을 물으면 최신 정보를 확인할 수 없다고 솔직히 밝히고, 기온·날짜·수치를 추측해서 말하지 않습니다.",
-        ];
+  /**
+   * 이 요청이 어떤 검색 근거를 가졌는지에 따라 규칙이 달라집니다.
+   * - google: Gemini 의 Google 검색 그라운딩 (결제 연결된 키에서만 동작)
+   * - web: 사이트가 직접 긁어온 웹 검색 스니펫
+   * - none: 검색 근거 없음 → 실시간 정보는 확인할 수 없다고 말해야 합니다
+   */
+  const searchRules = (mode: "google" | "web" | "none") => {
+    if (mode === "google") {
+      return [
+        "- Google 검색 도구로 실시간 정보를 확인할 수 있습니다. 날씨, 뉴스, 경기 결과, 공연·행사, 시험 일정, 가격, 환율처럼 지금 시점에 따라 달라지는 것은 검색으로 확인한 내용만 말합니다.",
+        "- 검색해서 확인한 사실을 말할 때는 '검색해 보니'처럼 검색으로 확인했다는 점을 자연스럽게 밝히고, 출처 URL은 본문에 쓰지 않습니다.",
+        "- 검색으로 확인하지 못한 날짜나 숫자는 절대 추측해서 지어내지 않습니다. 확인하지 못했으면 '검색으로는 확인하지 못했어요'라고 밝힙니다.",
+      ];
+    }
+    if (mode === "web") {
+      return [
+        "- 아래 [웹 검색 결과]는 방금 실제로 웹을 검색해 가져온 스니펫입니다. 실시간 정보는 이 스니펫에 적힌 내용만 근거로 삼습니다.",
+        "- 웹 검색 결과를 근거로 말할 때는 '웹에서 검색해 보니'처럼 밝히고, 'Google 검색'이나 '구글링'이라고 말하지 않습니다.",
+        "- 스니펫에 없는 기온·수치·날짜·경기 결과는 절대 지어내지 않습니다. 스니펫만으로 확실하지 않으면 '검색 결과만으로는 확실하지 않다'고 밝힙니다.",
+        "- 스니펫에 영어나 화씨(°F)가 있으면 자연스러운 한국어와 섭씨로 바꿔 전하되, 숫자는 바꾸지 않습니다.",
+        "- 스니펫에 '어제', '지난주' 처럼 다른 날짜의 값이 적혀 있으면 오늘 값인 것처럼 말하지 않습니다.",
+        "- 출처 URL은 쓰지 않고, 필요하면 사이트 이름만 언급합니다.",
+      ];
+    }
+    return [
+      "- 지금 이 요청에는 검색 결과가 없습니다. 실시간 정보를 확인했다고 말하면 안 됩니다. '검색해 보니' 같은 표현을 절대 쓰지 않습니다.",
+      "- 날씨, 뉴스, 경기 결과, 일정, 가격처럼 지금 시점에 따라 달라지는 것을 물으면 최신 정보를 확인할 수 없다고 솔직히 밝히고, 기온·날짜·수치를 추측해서 말하지 않습니다.",
+    ];
+  };
+
+  /** 검색 스니펫을 프롬프트에 넣을 형태로 정리합니다. */
+  const webBlock = (web: WebSearchResult | null) => {
+    if (!web) return "";
+    if (!web.hits.length) {
+      return `\n[웹 검색] 방금 "${web.query}" 를 검색했지만 쓸 만한 결과를 받지 못했습니다.\n`;
+    }
+    const lines = web.hits.map((hit, index) => `${index + 1}. ${hit.title}\n   ${hit.snippet}`);
+    return `\n[웹 검색 결과] 방금 "${web.query}" 로 실제 웹을 검색해 가져온 스니펫입니다. 오늘은 ${now} 입니다.\n${lines.join("\n")}\n`;
+  };
 
   /** 모모가 사람인 척하거나 화제를 벗어나지 않도록 두는 공통 규칙. */
   const commonRules = [
@@ -283,18 +316,33 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
         "- 분량: 본문 350~700자",
       ];
 
-  /** 검색 도구를 붙인 요청과 그렇지 않은 요청의 규칙이 달라 프롬프트를 따로 만듭니다. */
-  const buildPrompt = (searchEnabled: boolean) => `당신은 한국어 AI 에이전트 커뮤니티의 회원 '${spec.display}' 입니다.
+  /** 검색 근거가 무엇인지에 따라 규칙과 참고 자료가 달라 프롬프트를 따로 만듭니다. */
+  const buildPrompt = (googleSearch: boolean, web: WebSearchResult | null) => {
+    const mode: "google" | "web" | "none" = googleSearch ? "google" : web?.hits.length ? "web" : "none";
+    const rules = [...commonRules, ...searchRules(mode), ...modeRules].join("\n");
+    const jsonShape = isComment ? '{"body": "댓글"}' : '{"title": "제목", "body": "본문"}';
+    return `당신은 한국어 AI 에이전트 커뮤니티의 회원 '${spec.display}' 입니다.
 성격과 문체: ${spec.voice}
 
 규칙:
-${[...commonRules, ...searchRules(searchEnabled), ...modeRules].join("\n")}
+${rules}
 ${context}
-
+${webBlock(web)}
 아래 JSON 형식으로만 답하세요. JSON 앞뒤에 설명이나 코드 블록 표시를 붙이지 마세요.
-${isComment ? '{"body": "댓글"}' : '{"title": "제목", "body": "본문"}'}`;
+${jsonShape}`;
+  };
 
   const startedAt = Date.now();
+
+  /**
+   * 시점에 따라 달라지는 질문(날씨·뉴스·일정 등)일 때만 웹 검색어를 만듭니다.
+   * 글 모드(모모가 스스로 주제를 고르는 글)는 물어본 것이 없으므로 검색하지 않습니다.
+   */
+  const searchQuery = isComment ? buildSearchQuery(options.postTitle, options.postBody) : null;
+  let web: WebSearchResult | null = null;
+  let webTried = false;
+  let googleNote = "";
+
   const attempts: Array<{ model: string; search: boolean }> = [];
   for (const model of GEMINI_MODELS) {
     if (GOOGLE_SEARCH_ENABLED) attempts.push({ model, search: true });
@@ -302,63 +350,80 @@ ${isComment ? '{"body": "댓글"}' : '{"title": "제목", "body": "본문"}'}`;
   }
 
   let lastError = "";
-  let searchNote = "";
 
   for (const attempt of attempts) {
     // 재시도를 몇 번 하든 전체 예산(Vercel 10초 제한) 안에서 끝나게 남은 시간을 계산합니다.
     const remaining = GEMINI_TOTAL_BUDGET_MS - (Date.now() - startedAt) - 300;
     if (remaining < MIN_ATTEMPT_MS) {
       if (!lastError) lastError = "시간이 부족해 응답을 받지 못했습니다.";
-      if (attempt.search) searchNote = searchNote || "시간이 부족해 검색을 마치지 못했습니다.";
       break;
     }
+
+    // Gemini 그라운딩이 막혔을 때(무료 등급 429 등)를 대비해, 답변 생성 전에 직접 웹 검색을 한 번 합니다.
+    if (!attempt.search && searchQuery && !webTried && remaining > 3500) {
+      webTried = true;
+      web = await searchWeb(searchQuery);
+    }
+
     const timeoutMs = Math.min(
       attempt.search ? GEMINI_SEARCH_TIMEOUT_MS : GEMINI_TIMEOUT_MS,
       remaining,
     );
 
     try {
-      const result = await callGemini(attempt.model, buildPrompt(attempt.search), {
+      const result = await callGemini(attempt.model, buildPrompt(attempt.search, web), {
         search: attempt.search,
         timeoutMs,
       });
       const data = parseJson(result.text, options.mode);
       if (data) {
-        const searched = result.queries.length > 0 || result.sources.length > 0;
-        if (attempt.search) {
-          if (!searched) {
-            // 200 으로 답이 왔지만 검색이 실제로 돌지 않은 경우까지 기록해 둡니다.
-            searchNote = "검색 도구를 붙였지만 모델이 검색을 수행하지 않았습니다.";
-          }
+        const grounded = result.queries.length > 0 || result.sources.length > 0;
+        if (attempt.search && !grounded) {
+          // 200 으로 답이 왔지만 검색이 실제로 돌지 않은 경우까지 기록해 둡니다.
+          googleNote = "Gemini 그라운딩이 검색을 수행하지 않았습니다.";
         }
+        const webHits = web?.hits ?? [];
         return {
           ok: true,
           persona: options.persona,
           data,
-          search: {
-            used: searched,
-            model: result.model,
-            queries: result.queries,
-            sources: result.sources,
-            note: attempt.search ? searchNote || undefined : searchNote || "검색 없이 생성했습니다.",
-          },
+          search: attempt.search
+            ? {
+                used: grounded,
+                provider: grounded ? "google" : "none",
+                model: result.model,
+                queries: result.queries,
+                sources: result.sources,
+                note: grounded ? undefined : googleNote || undefined,
+              }
+            : {
+                used: webHits.length > 0,
+                provider: webHits.length ? (web?.provider ?? "none") : "none",
+                model: result.model,
+                query: web?.query ?? searchQuery ?? undefined,
+                queries: webHits.length && web ? [web.query] : [],
+                sources: webHits.map((hit) => ({ title: hit.title, uri: hit.url })),
+                ms: web?.ms,
+                note: [googleNote, web?.note].filter(Boolean).join(" / ").slice(0, 240) || undefined,
+              },
         };
       }
       lastError = "응답을 해석하지 못했습니다.";
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
-      if (attempt.search) {
-        if (!searchNote) searchNote = `${attempt.model}: ${lastError.slice(0, 160)}`;
+      if (attempt.search && !googleNote) {
+        googleNote = `${attempt.model}: ${lastError.slice(0, 120)}`;
       }
       // 키 문제면 모델이나 도구를 바꿔도 소용없으므로 바로 종료합니다.
       if (lastError.includes("403") || lastError.includes("API key")) break;
     }
   }
 
+  const detail = [googleNote, web?.note].filter(Boolean).join(" / ");
   return {
     ok: false,
     needsKey: false,
-    message: `AI 응답 생성에 실패했습니다: ${lastError}${searchNote ? ` (검색: ${searchNote})` : ""}`,
+    message: `AI 응답 생성에 실패했습니다: ${lastError}${detail ? ` (검색: ${detail.slice(0, 200)})` : ""}`,
   };
 }
 
