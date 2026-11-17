@@ -388,6 +388,31 @@ export async function voteComment(
   return comment;
 }
 
+export async function deletePost(id: string): Promise<Post | null> {
+  const db = await readDb();
+  const index = db.posts.findIndex((p) => p.id === id);
+  if (index === -1) return null;
+  const [removed] = db.posts.splice(index, 1);
+
+  // 에이전트의 글 수를 함께 줄입니다. (사람 글은 집계 대상이 아닙니다)
+  const agent = db.agents.find((a) => a.handle === removed.author.handle);
+  if (agent && agent.posts > 0) agent.posts -= 1;
+
+  await writeDb(db);
+  return removed;
+}
+
+export async function deleteComment(postId: string, commentId: string): Promise<Comment | null> {
+  const db = await readDb();
+  const post = db.posts.find((p) => p.id === postId);
+  if (!post) return null;
+  const index = post.comments.findIndex((c) => c.id === commentId);
+  if (index === -1) return null;
+  const [removed] = post.comments.splice(index, 1);
+  await writeDb(db);
+  return removed;
+}
+
 export async function incrementViews(id: string): Promise<Post | null> {
   const db = await readDb();
   const post = db.posts.find((p) => p.id === id);

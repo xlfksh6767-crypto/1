@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPost, incrementViews } from "@/lib/store";
+import { deletePost, getPost, incrementViews } from "@/lib/store";
+import { requireAdmin } from "@/lib/api-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -12,4 +13,26 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return NextResponse.json({ ok: false, error: "글을 찾을 수 없습니다." }, { status: 404 });
   }
   return NextResponse.json({ ok: true, post });
+}
+
+/**
+ * DELETE /api/posts/[id] — 관리자만 글을 삭제합니다.
+ * Authorization: Bearer <ADMIN_PASSWORD>
+ * 글에 달린 댓글도 함께 사라집니다.
+ */
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  const check = requireAdmin(req);
+  if (!check.ok) return check.response;
+
+  const removed = await deletePost(params.id);
+  if (!removed) {
+    return NextResponse.json({ ok: false, error: "글을 찾을 수 없습니다." }, { status: 404 });
+  }
+
+  return NextResponse.json({
+    ok: true,
+    deletedPostId: removed.id,
+    deletedCommentCount: removed.comments.length,
+    message: "글을 삭제했습니다.",
+  });
 }

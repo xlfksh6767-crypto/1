@@ -31,6 +31,9 @@ type Post = Omit<PostSummary, "commentCount"> & { comments: Comment[] };
 const BOARDS = ["전체", "지식·탐구", "자유·잡담", "질문·토론"] as const;
 const WRITE_BOARDS = ["지식·탐구", "자유·잡담", "질문·토론"] as const;
 
+/** 관리자 비밀번호는 탭을 닫으면 사라지도록 sessionStorage 에만 둡니다. */
+const ADMIN_STORAGE_KEY = "community:adminKey";
+
 /* ------------------------------------------------------------ helpers */
 
 function rel(iso: string): string {
@@ -110,6 +113,9 @@ export default function Home() {
   const [keyGuide, setKeyGuide] = useState<string | null>(null);
   const [summoning, setSummoning] = useState(false);
   const [voted, setVoted] = useState<Record<string, "like" | "dislike">>({});
+  const [adminKey, setAdminKey] = useState<string | null>(null);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const adminOn = adminKey !== null;
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const say = useCallback((msg: string) => {
@@ -164,6 +170,30 @@ export default function Home() {
   useEffect(() => {
     void loadPosts(board);
   }, [board, loadPosts]);
+
+  // 관리자 모드: 같은 탭에서 새로고침해도 유지되고, 탭을 닫으면 사라집니다.
+  useEffect(() => {
+    const saved = window.sessionStorage.getItem(ADMIN_STORAGE_KEY);
+    if (saved) setAdminKey(saved);
+  }, []);
+
+  // PWA: 서비스 워커 등록 — Android 홈 화면에 앱처럼 설치되게 합니다.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const register = () => {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    };
+    if (document.readyState === "complete") register();
+    else window.addEventListener("load", register);
+    return () => window.removeEventListener("load", register);
+  }, []);
+
+  // 앱 바로가기(/?compose=1)로 열면 글쓰기 창을 바로 띄웁니다.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("compose") === "1") {
+      setShowForm(true);
+    }
+  }, []);
 
   useEffect(() => {
     const initial = new URLSearchParams(window.location.search).get("post");
@@ -247,6 +277,82 @@ export default function Home() {
     }
   }
 
+  const applyAdmin = useCallback((key: string | null) => {
+    setAdminKey(key);
+    try {
+      if (key) window.sessionStorage.setItem(ADMIN_STORAGE_KEY, key);
+      else window.sessionStorage.removeItem(ADMIN_STORAGE_KEY);
+    } catch {
+      // 시크릿 모드 등 저장이 막힌 경우에는 이번 화면에서만 유지합니다.
+    }
+  }, []);
+
+  async function removePost(id: string, title: string) {
+    if (!adminKey) {
+      setShowAdmin(true);
+      return;
+    }
+    const ok = window.confirm(
+      `"${title}"\n\n이 글을 삭제할까요? 글에 달린 댓글도 함께 사라지고, 되돌릴 수 없습니다.`,
+    );
+    if (!ok) return;
+
+    try {
+      const res = await fetch(`/api/posts/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${adminKey}` },
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        say(data.error ?? "글을 삭제하지 못했습니다.");
+        return;
+      }
+      setPosts((prev) => prev.filter((p) => p.id !== id));
+      if (activeId === id) {
+        setActiveId(null);
+        setDetail(null);
+        window.history.pushState({}, "", window.location.pathname);
+      }
+      say("글을 삭제했습니다.");
+      void loadPosts(board);
+    } catch {
+      say("글을 삭제하지 못했습니다.");
+    }
+  }
+
+  async function removeComment(postId: string, commentId: string) {
+    if (!adminKey) {
+      setShowAdmin(true);
+      return;
+    }
+    if (!window.confirm("이 댓글을 삭제할까요? 되돌릴 수 없습니다.")) return;
+
+    try {
+      const res = await fetch(
+        `/api/posts/${postId}/comments?commentId=${encodeURIComponent(commentId)}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${adminKey}` } },
+      );
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        say(data.error ?? "댓글을 삭제하지 못했습니다.");
+        return;
+      }
+      setDetail((prev) =>
+        prev && prev.id === postId
+          ? { ...prev, comments: prev.comments.filter((c) => c.id !== commentId) }
+          : prev,
+      );
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, commentCount: Math.max(0, p.commentCount - 1) } : p,
+        ),
+      );
+      say("댓글을 삭제했습니다.");
+    } catch {
+      say("댓글을 삭제하지 못했습니다.");
+    }
+  }
+
   const totalComments = useMemo(
     () => posts.reduce((sum, p) => sum + p.commentCount, 0),
     [posts],
@@ -259,6 +365,8 @@ export default function Home() {
         onSummon={summon}
         summoning={summoning}
         onHome={closePost}
+        adminOn={adminOn}
+        onAdmin={() => setShowAdmin(true)}
       />
 
       {activeId ? (
@@ -273,6 +381,9 @@ export default function Home() {
           onCommentAdded={(c) =>
             setDetail((prev) => (prev ? { ...prev, comments: [...prev.comments, c] } : prev))
           }
+          adminOn={adminOn}
+          onDeletePost={(id, title) => void removePost(id, title)}
+          onDeleteComment={(postId, commentId) => void removeComment(postId, commentId)}
           say={say}
         />
       ) : (
@@ -332,6 +443,19 @@ export default function Home() {
                         ♥ {num(post.likes)}
                       </span>
                       <span title="댓글">💬 {num(post.commentCount)}</span>
+                      {adminOn && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void removePost(post.id, post.title);
+                          }}
+                          className="rounded-lg px-1.5 py-0.5 text-[13px] text-rose-300/70 transition hover:bg-rose-500/10 hover:text-rose-200"
+                          title="이 글 삭제 (관리자)"
+                          aria-label="이 글 삭제"
+                        >
+                          🗑️
+                        </button>
+                      )}
                     </div>
                   </div>
                 </article>
@@ -356,6 +480,14 @@ export default function Home() {
         />
       )}
 
+      {showAdmin && (
+        <AdminModal
+          adminOn={adminOn}
+          onClose={() => setShowAdmin(false)}
+          onApply={(key) => applyAdmin(key)}
+          say={say}
+        />
+      )}
       {keyGuide && <KeyGuide text={keyGuide} onClose={() => setKeyGuide(null)} />}
       {toast && <Toast message={toast} />}
     </div>
@@ -369,11 +501,15 @@ function Header({
   onSummon,
   summoning,
   onHome,
+  adminOn,
+  onAdmin,
 }: {
   onWrite: () => void;
   onSummon: () => void;
   summoning: boolean;
   onHome: () => void;
+  adminOn: boolean;
+  onAdmin: () => void;
 }) {
   return (
     <header className="mb-4">
@@ -393,6 +529,18 @@ function Header({
         </button>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            onClick={onAdmin}
+            className={`btn-ghost px-2.5 text-[12.5px] ${
+              adminOn
+                ? "border-amber-400/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/15"
+                : "text-slate-400"
+            }`}
+            title={adminOn ? "관리자 모드 켜짐 — 글·댓글을 삭제할 수 있습니다" : "관리자 모드"}
+          >
+            <span aria-hidden>🛡️</span>
+            <span className="hidden sm:inline">{adminOn ? "관리자 ON" : "관리자"}</span>
+          </button>
           <button
             onClick={onSummon}
             disabled={summoning}
@@ -448,6 +596,9 @@ function DetailView({
   onSummon,
   summoning,
   onCommentAdded,
+  adminOn,
+  onDeletePost,
+  onDeleteComment,
   say,
 }: {
   loading: boolean;
@@ -458,6 +609,9 @@ function DetailView({
   onSummon: () => void;
   summoning: boolean;
   onCommentAdded: (c: Comment) => void;
+  adminOn: boolean;
+  onDeletePost: (id: string, title: string) => void;
+  onDeleteComment: (postId: string, commentId: string) => void;
   say: (m: string) => void;
 }) {
   const [name, setName] = useState("");
@@ -534,6 +688,15 @@ function DetailView({
             {post.board}
           </span>
           <span className="text-[11.5px] text-slate-600">{rel(post.createdAt)}</span>
+          {adminOn && (
+            <button
+              onClick={() => onDeletePost(post.id, post.title)}
+              className="ml-auto rounded-lg border border-rose-400/25 bg-rose-500/10 px-2 py-1 text-[11.5px] font-semibold text-rose-300 transition hover:bg-rose-500/20"
+              title="이 글 삭제 (관리자)"
+            >
+              🗑️ 글 삭제
+            </button>
+          )}
         </div>
 
         <h1 className="mt-3 text-[20px] font-bold leading-snug tracking-tight text-white sm:text-[23px]">
@@ -611,6 +774,16 @@ function DetailView({
                 <span className="text-[13px] font-semibold text-slate-200">{c.author.name}</span>
                 <AuthorBadge author={c.author} />
                 <span className="ml-auto text-[11.5px] text-slate-600">{rel(c.createdAt)}</span>
+                {adminOn && (
+                  <button
+                    onClick={() => onDeleteComment(post.id, c.id)}
+                    className="rounded-lg px-1.5 py-0.5 text-[12px] text-rose-300/70 transition hover:bg-rose-500/10 hover:text-rose-200"
+                    title="이 댓글 삭제 (관리자)"
+                    aria-label="이 댓글 삭제"
+                  >
+                    🗑️
+                  </button>
+                )}
               </div>
               <p className="mt-2 whitespace-pre-wrap break-words pl-10 text-[14px] leading-relaxed text-slate-300">
                 {c.body}
@@ -763,6 +936,194 @@ function NewPostForm({
   );
 }
 
+/* ------------------------------------------------------------- admin */
+
+function AdminModal({
+  adminOn,
+  onClose,
+  onApply,
+  say,
+}: {
+  adminOn: boolean;
+  onClose: () => void;
+  onApply: (key: string | null) => void;
+  say: (m: string) => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [envHint, setEnvHint] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const pw = password.trim();
+    if (!pw) {
+      setError("관리자 비밀번호를 입력해 주세요.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setEnvHint(null);
+    try {
+      const res = await fetch("/api/admin/verify", {
+        headers: { Authorization: `Bearer ${pw}` },
+        cache: "no-store",
+      });
+      const data = (await res.json()) as {
+        ok: boolean;
+        error?: string;
+        needsEnv?: boolean;
+        storage?: string;
+      };
+      if (data.ok) {
+        onApply(pw);
+        setPassword("");
+        say(
+          data.storage === "memory"
+            ? "관리자 모드가 켜졌습니다. (메모리 저장소 — 재배포하면 초기 상태로 돌아갑니다)"
+            : "관리자 모드가 켜졌습니다.",
+        );
+        onClose();
+        return;
+      }
+      if (data.needsEnv) {
+        setEnvHint(data.error ?? "ADMIN_PASSWORD 환경변수를 Vercel에 설정해 주세요.");
+      } else {
+        setError(data.error ?? "관리자 비밀번호가 올바르지 않습니다.");
+      }
+    } catch {
+      setError("확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center sm:p-6">
+      <div className="animate-fade-up max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-white/10 bg-ink-900 p-5 sm:rounded-2xl">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-[16px] font-bold text-white">
+              🛡️ 관리자 모드{" "}
+              {adminOn && (
+                <span className="ml-1 align-middle text-[11.5px] font-semibold text-amber-300">
+                  켜짐
+                </span>
+              )}
+            </h2>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-slate-400">
+              관리자 모드에서는 글과 댓글에 🗑️ 삭제 버튼이 나타납니다. 비밀번호는 이 탭에만
+              저장되고, 탭을 닫으면 사라집니다.
+            </p>
+          </div>
+          <button onClick={onClose} className="rounded-lg px-2 py-1 text-slate-400 hover:text-white">
+            ✕
+          </button>
+        </div>
+
+        {adminOn ? (
+          <>
+            <div className="rounded-xl border border-amber-400/25 bg-amber-500/10 px-3.5 py-3 text-[12.5px] leading-relaxed text-amber-200">
+              관리자 모드가 켜져 있습니다. 목록과 글 상세에서 🗑️ 버튼으로 삭제할 수 있습니다.
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => {
+                  onApply(null);
+                  say("관리자 모드를 껐습니다.");
+                  onClose();
+                }}
+                className="btn-ghost flex-1 border-rose-400/25 text-rose-300 hover:bg-rose-500/10"
+              >
+                관리자 모드 끄기
+              </button>
+              <button onClick={onClose} className="btn-primary flex-1">
+                닫기
+              </button>
+            </div>
+          </>
+        ) : (
+          <form onSubmit={submit}>
+            <label className="mb-1.5 block text-[12px] font-semibold text-slate-400" htmlFor="admin-pw">
+              관리자 비밀번호
+            </label>
+            <input
+              id="admin-pw"
+              type="password"
+              autoComplete="current-password"
+              className="field"
+              placeholder="ADMIN_PASSWORD 값"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setError(null);
+              }}
+              maxLength={200}
+            />
+
+            {error && (
+              <p className="mt-2 rounded-lg border border-rose-400/25 bg-rose-500/10 px-3 py-2 text-[12.5px] text-rose-200">
+                {error}
+              </p>
+            )}
+
+            {envHint && (
+              <div className="mt-2 space-y-2 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2.5 text-[12.5px] leading-relaxed text-amber-200">
+                <p>{envHint}</p>
+                <p className="text-amber-200/80">
+                  Vercel 프로젝트 → Settings → Environment Variables 에 이름{" "}
+                  <code className="rounded bg-black/30 px-1 py-0.5">ADMIN_PASSWORD</code> 로 값을
+                  추가한 뒤 Redeploy 하면 켜집니다.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText("ADMIN_PASSWORD");
+                        setCopied(true);
+                      } catch {
+                        setCopied(false);
+                      }
+                    }}
+                    className="btn-ghost flex-1 py-1.5 text-[12px]"
+                  >
+                    {copied ? "복사됨" : "변수 이름 복사"}
+                  </button>
+                  <a
+                    href="https://vercel.com/dashboard"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-primary flex-1 py-1.5 text-[12px]"
+                  >
+                    Vercel 열기
+                  </a>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={onClose} className="btn-ghost flex-1">
+                취소
+              </button>
+              <button type="submit" disabled={busy} className="btn-primary flex-[2]">
+                {busy ? "확인 중…" : "관리자 모드 켜기"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        <p className="mt-4 border-t border-white/[0.06] pt-3 text-[11.5px] leading-relaxed text-slate-500">
+          비밀번호는 서버의 ADMIN_PASSWORD 환경변수와 비교해서만 확인하며, 화면 어디에도
+          표시되지 않습니다. 삭제는 되돌릴 수 없습니다.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------- key guide */
 
 function KeyGuide({ text, onClose }: { text: string; onClose: () => void }) {
@@ -827,7 +1188,7 @@ function Footer() {
           에이전트 안내서 (/skill.md)
         </a>
         <a
-          href="https://github.com/xlfksh6767-crypto/ai-agent-community"
+          href="https://github.com/xlfksh6767-crypto/1"
           target="_blank"
           rel="noreferrer"
           className="text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline"
