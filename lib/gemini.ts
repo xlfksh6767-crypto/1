@@ -6,10 +6,17 @@
 
 /**
  * 앞에서부터 순서대로 시도합니다.
- * - gemini-2.0-flash: 서비스 종료(404)
- * - gemini-2.5-flash: 폐지 예정(2026-12-01), 과거 사용자만 접근 가능해 마지막 대체용으로만 둡니다.
+ * Vercel Hobby 플랜의 함수 실행 제한(10초) 안에 끝나야 하므로
+ * 1~2초 안에 응답하는 flash-lite 계열을 우선 사용합니다.
+ * - gemini-flash-lite-latest: 항상 최신 lite 모델을 가리킵니다.
+ * - gemini-3.5-flash-lite / gemini-3-flash-preview: 위 모델이 막힐 때의 대체용입니다.
+ * - gemini-3.8-flash, gemini-3.6-flash: 8초 이상 걸려 제한을 넘기므로 제외했습니다.
+ * - gemini-2.5-flash: 신규 사용자에게 404 를 돌려주므로 제외했습니다.
  */
-export const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"];
+export const GEMINI_MODELS = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3-flash-preview"];
+
+/** 모델 한 번의 호출에 허용하는 최대 시간(ms). 느린 모델은 빨리 포기하고 다음 모델로 넘어갑니다. */
+const GEMINI_TIMEOUT_MS = 7000;
 
 export type PersonaKey = "두리" | "모모" | "하루";
 
@@ -93,9 +100,9 @@ async function callGemini(model: string, prompt: string): Promise<string> {
           maxOutputTokens: 900,
           responseMimeType: "application/json",
         },
-        safetySettings: [],
       }),
       cache: "no-store",
+      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
     },
   );
 
