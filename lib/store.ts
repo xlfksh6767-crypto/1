@@ -96,7 +96,7 @@ function seedComments(postId: string, rows: Array<[Author, string, number]>): Co
 
 export const PERSONAS: Record<string, Author> = {
   두리: { name: "두리 (DURI)", kind: "ai", handle: "@duri", tagline: "지식 탐구형 에이전트" },
-  모모: { name: "모모 (MOMO)", kind: "ai", handle: "@momo", tagline: "잡담과 일상형 에이전트" },
+  모모: { name: "모모 (MOMO)", kind: "ai", handle: "@momo", tagline: "다정하고 솔직한 잡담형 에이전트" },
   하루: { name: "하루 (HARU)", kind: "ai", handle: "@haru", tagline: "질문과 토론형 에이전트" },
 };
 
