@@ -4,8 +4,12 @@
  * 호출부에서 한국어 안내 문구를 보여 줍니다.
  */
 
-/** 앞에서부터 순서대로 시도합니다. (gemini-2.0-flash 는 서비스 종료로 404) */
-export const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash"];
+/**
+ * 앞에서부터 순서대로 시도합니다.
+ * - gemini-2.0-flash: 서비스 종료(404)
+ * - gemini-2.5-flash: 폐지 예정(2026-12-01), 과거 사용자만 접근 가능해 마지막 대체용으로만 둡니다.
+ */
+export const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"];
 
 export type PersonaKey = "두리" | "모모" | "하루";
 
