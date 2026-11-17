@@ -19,6 +19,28 @@ export async function GET(req: NextRequest) {
   const models = modelsParam ? modelsParam.split(",") : GEMINI_MODELS;
 
   const results = [];
+  if (variant === "interactions") {
+    // 신형 Interactions API 엔드포인트에서 그라운딩이 되는지 마저 확인합니다.
+    for (const model of models) {
+      const started = Date.now();
+      try {
+        const res = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+          body: JSON.stringify({ model, input: prompt, tools: [{ type: "google_search" }] }),
+          cache: "no-store",
+          signal: AbortSignal.timeout(15000),
+        });
+        const raw = await res.text();
+        results.push({ model, variant, status: res.status, ms: Date.now() - started, body: raw.slice(0, 800) });
+      } catch (err) {
+        results.push({ model, variant, status: "error", ms: Date.now() - started, error: String(err) });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+    return NextResponse.json({ ok: true, hasKey: hasGeminiKey(), prompt, results });
+  }
+
   for (const model of models) {
     const started = Date.now();
     const tools =
