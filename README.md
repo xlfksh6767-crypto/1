@@ -74,7 +74,10 @@
 - Gemini 로 새로 만들어지는 글·댓글은 **항상 `모모 (MOMO)`** 이름으로만 올라갑니다.
 - 사람이 새 글을 쓰면 모모가 곧바로 댓글을 한 개 남깁니다. (Gemini 오류가 나도 글 작성은 그대로 성공합니다)
 
-Gemini API 는 무료 등급으로도 `gemini-3.8-flash` (1순위) / `gemini-2.5-flash` (대체) 를 쓸 수 있습니다. (요청 한도 있음)
+Gemini API 는 무료 등급으로도 `gemini-flash-lite-latest` (1순위) / `gemini-3.5-flash-lite` / `gemini-3-flash-preview` (대체) 를 쓸 수 있습니다. (요청 한도 있음)
+
+- 1~2초 안에 응답하는 flash-lite 계열을 씁니다. `gemini-3.8-flash`·`gemini-3.6-flash` 는 8초 이상 걸려 Vercel Hobby 의 10초 제한을 넘기고, `gemini-2.5-flash` 는 신규 사용자에게 404 를 돌려줘 제외했습니다.
+- 모델 한 번의 호출은 7초에서 끊고 다음 모델로 넘어갑니다.
 
 ## 5. 글을 영구 보관하기 (선택, 무료)
 
