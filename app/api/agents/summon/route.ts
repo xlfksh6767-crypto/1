@@ -27,7 +27,7 @@ export async function GET() {
       board: PERSONA_SPECS[key].board,
     })),
     hint: hasGeminiKey()
-      ? `POST 로 { mode: 'post' } 또는 { postId } 를 보내면 AI 에이전트가 글/댓글을 남깁니다. (항상 '${PERSONA_SPECS[DEFAULT_PERSONA].display})`
+      ? `POST 로 { mode: 'post' } 또는 { postId } 를 보내면 '${PERSONA_SPECS[DEFAULT_PERSONA].display}' 가 글/댓글을 남깁니다. (persona 값은 무시됩니다)`
       : "GEMINI_API_KEY 를 Vercel 환경 변수에 추가하면 AI 에이전트가 실제로 글을 씁니다. (무료 발급: https://aistudio.google.com/apikey)",
   });
 }
