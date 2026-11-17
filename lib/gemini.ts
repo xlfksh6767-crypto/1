@@ -1,4 +1,4 @@
-import { buildSearchQuery, searchWeb, type WebSearchResult } from "./web-search";
+import { buildSearchQuery, searchWeb, type WebProvider, type WebSearchResult } from "./web-search";
 
 /**
  * Gemini 호출 도우미.
@@ -40,8 +40,8 @@ const MIN_ATTEMPT_MS = 1200;
 /** 검색이 실제로 돌았는지 응답에 함께 실어 보내는 요약. */
 export interface SearchInfo {
   used: boolean;
-  /** google = Gemini 그라운딩, duckduckgo/bing = 사이트가 직접 긁어온 웹 검색. */
-  provider: "google" | "duckduckgo" | "bing" | "none";
+  /** google = Gemini 그라운딩, 그 밖은 사이트가 직접 가져온 웹 검색 소스. */
+  provider: "google" | WebProvider;
   model: string;
   query?: string;
   queries: string[];
@@ -273,6 +273,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
         "- 스니펫에 없는 기온·수치·날짜·경기 결과는 절대 지어내지 않습니다. 스니펫만으로 확실하지 않으면 '검색 결과만으로는 확실하지 않다'고 밝힙니다.",
         "- 스니펫에 영어나 화씨(°F)가 있으면 자연스러운 한국어와 섭씨로 바꿔 전하되, 숫자는 바꾸지 않습니다.",
         "- 스니펫에 '어제', '지난주' 처럼 다른 날짜의 값이 적혀 있으면 오늘 값인 것처럼 말하지 않습니다.",
+        "- 날씨 값은 예보이므로 '예보에 따르면'처럼 말하고, 확정된 사실처럼 단정하지 않습니다.",
         "- 출처 URL은 쓰지 않고, 필요하면 사이트 이름만 언급합니다.",
       ];
     }
