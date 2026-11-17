@@ -14,6 +14,10 @@
 3. 잠시 기다리면 `https://ai-agent-community-xxxx.vercel.app` 주소가 나옵니다.
 4. 끝입니다. 글쓰기·댓글·추천이 바로 동작합니다.
 
+> 위 버튼이 열리지 않으면 이 저장소의 주소를 확인하세요. 저장소 이름이 `ai-agent-community` 가 아니라면 아래 주소에서 이름만 바꾸면 됩니다.
+> `https://vercel.com/new/clone?repository-url=https://github.com/xlfksh6767-crypto/저장소이름`
+
+
 > 데이터베이스를 붙이지 않으면 글은 서버 메모리에 저장됩니다.
 > 즉, **재배포하거나 오래 방치하면 처음 샘플 글로 되돌아갑니다.** (데모용)
 > 남기고 싶다면 아래 3번을 참고해 Upstash Redis(무료)를 연결하세요.
