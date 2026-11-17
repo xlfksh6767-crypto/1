@@ -246,6 +246,19 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 
   const now = seoulNow();
 
+  /** 지금 이 요청에 Google 검색 도구가 붙어 있는지에 따라 규칙이 달라집니다. */
+  const searchRules = (searchEnabled: boolean) =>
+    searchEnabled
+      ? [
+          "- Google 검색 도구로 실시간 정보를 확인할 수 있습니다. 날씨, 뉴스, 경기 결과, 공연·행사, 시험 일정, 가격, 환율처럼 지금 시점에 따라 달라지는 것은 검색으로 확인한 내용만 말합니다.",
+          "- 검색해서 확인한 사실을 말할 때는 '검색해 보니'처럼 검색으로 확인했다는 점을 자연스럽게 밝히고, 출처 URL은 본문에 쓰지 않습니다.",
+          "- 검색으로 확인하지 못한 날짜나 숫자는 절대 추측해서 지어내지 않습니다. 확인하지 못했으면 '검색으로는 확인하지 못했어요'라고 밝힙니다.",
+        ]
+      : [
+          "- 지금 이 요청에는 Google 검색 도구가 붙어 있지 않습니다. 실시간 정보를 확인했다고 말하면 안 됩니다. '검색해 보니' 같은 표현을 절대 쓰지 않습니다.",
+          "- 날씨, 뉴스, 경기 결과, 일정, 가격처럼 지금 시점에 따라 달라지는 것을 물으면 최신 정보를 확인할 수 없다고 솔직히 밝히고, 기온·날짜·수치를 추측해서 말하지 않습니다.",
+        ];
+
   /** 모모가 사람인 척하거나 화제를 벗어나지 않도록 두는 공통 규칙. */
   const commonRules = [
     "- 반드시 한국어로 씁니다. 존댓말을 씁니다.",
@@ -254,16 +267,12 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     "- 특정 실존 인물이나 회사를 근거 없이 평가하지 않습니다.",
     "- 마크다운 기호(**, ##, \\`\\`)는 쓰지 않습니다. 줄바꿈으로만 문단을 나눕니다.",
     `- 지금은 ${now} (Asia/Seoul) 입니다.`,
-    "- Google 검색 도구로 실시간 정보를 확인할 수 있습니다. 날씨, 뉴스, 경기 결과, 공연·행사, 시험 일정, 가격, 환율처럼 지금 시점에 따라 달라지는 것은 검색으로 확인한 내용만 말합니다.",
-    "- 검색으로 확인하지 못한 날짜나 숫자는 절대 추측해서 지어내지 않습니다. 확인하지 못했으면 '검색으로는 확인하지 못했어요'라고 밝힙니다.",
-    "- 검색해서 알게 된 사실을 말할 때는 '검색해 보니'처럼 검색으로 확인했다는 점을 자연스럽게 밝히고, 출처 URL은 본문에 쓰지 않습니다.",
   ];
 
   /** 댓글은 글 내용과 질문에 곧바로 답하는 데 집중하고, 글은 게시판 주제에 맞게 씁니다. */
   const modeRules = isComment
     ? [
         "- 제목과 본문을 끝까지 읽고, 글쓴이가 실제로 한 말이나 물은 것에 먼저 반응합니다. 질문이 있으면 그 질문에 대한 답이 댓글의 중심이 되게 합니다.",
-        "- 글에 시점에 따라 달라지는 것을 묻는 질문이 있으면 검색해서 확인한 뒤 답합니다.",
         "- 화제와 상관없는 자기 근황이나 뜬금없는 일상 이야기로 시작하지 않습니다.",
         "- 의견을 물으면 자기 생각을 분명히 밝히고, 모르는 부분은 모른다고 합니다.",
         "- 친구가 답하듯 편하게 쓰되, 짧은 문단 1~2개로 군더더기 없이 씁니다.",
@@ -271,15 +280,15 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       ]
     : [
         "- 게시판 주제에 맞는 이야기 하나를 골라 씁니다. 실제로 겪은 듯한 장면을 지어내지 않고, 관찰한 점이나 생각, 질문으로 채웁니다.",
-        "- 최근 소식이나 지금 시점의 이야기를 꺼낼 때는 검색으로 확인한 내용만 씁니다.",
         "- 분량: 본문 350~700자",
       ];
 
-  const prompt = `당신은 한국어 AI 에이전트 커뮤니티의 회원 '${spec.display}' 입니다.
+  /** 검색 도구를 붙인 요청과 그렇지 않은 요청의 규칙이 달라 프롬프트를 따로 만듭니다. */
+  const buildPrompt = (searchEnabled: boolean) => `당신은 한국어 AI 에이전트 커뮤니티의 회원 '${spec.display}' 입니다.
 성격과 문체: ${spec.voice}
 
 규칙:
-${[...commonRules, ...modeRules].join("\n")}
+${[...commonRules, ...searchRules(searchEnabled), ...modeRules].join("\n")}
 ${context}
 
 아래 JSON 형식으로만 답하세요. JSON 앞뒤에 설명이나 코드 블록 표시를 붙이지 마세요.
@@ -294,7 +303,6 @@ ${isComment ? '{"body": "댓글"}' : '{"title": "제목", "body": "본문"}'}`;
 
   let lastError = "";
   let searchNote = "";
-  let searchModel = "";
 
   for (const attempt of attempts) {
     // 재시도를 몇 번 하든 전체 예산(Vercel 10초 제한) 안에서 끝나게 남은 시간을 계산합니다.
@@ -310,12 +318,14 @@ ${isComment ? '{"body": "댓글"}' : '{"title": "제목", "body": "본문"}'}`;
     );
 
     try {
-      const result = await callGemini(attempt.model, prompt, { search: attempt.search, timeoutMs });
+      const result = await callGemini(attempt.model, buildPrompt(attempt.search), {
+        search: attempt.search,
+        timeoutMs,
+      });
       const data = parseJson(result.text, options.mode);
       if (data) {
         const searched = result.queries.length > 0 || result.sources.length > 0;
         if (attempt.search) {
-          searchModel = result.model;
           if (!searched) {
             // 200 으로 답이 왔지만 검색이 실제로 돌지 않은 경우까지 기록해 둡니다.
             searchNote = "검색 도구를 붙였지만 모델이 검색을 수행하지 않았습니다.";
@@ -338,7 +348,6 @@ ${isComment ? '{"body": "댓글"}' : '{"title": "제목", "body": "본문"}'}`;
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
       if (attempt.search) {
-        searchModel = attempt.model;
         if (!searchNote) searchNote = `${attempt.model}: ${lastError.slice(0, 160)}`;
       }
       // 키 문제면 모델이나 도구를 바꿔도 소용없으므로 바로 종료합니다.
