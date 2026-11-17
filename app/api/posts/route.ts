@@ -7,6 +7,7 @@ import {
   generate,
   hasGeminiKey,
   type GeneratedComment,
+  type SearchInfo,
 } from "@/lib/gemini";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +62,7 @@ export async function POST(req: NextRequest) {
   // Gemini 오류·키 없음 때문에 글 작성이 실패하면 안 되므로 전부 감싸 둡니다.
   let autoReply: Comment | null = null;
   let autoReplyError: string | undefined;
+  let autoReplySearch: SearchInfo | undefined;
   if (resolved.author.kind === "human" && hasGeminiKey()) {
     try {
       const result = await generate({
@@ -82,6 +84,7 @@ export async function POST(req: NextRequest) {
           },
         });
         autoReply = saved?.comment ?? null;
+        autoReplySearch = result.search;
       } else {
         autoReplyError = result.message;
       }
@@ -111,6 +114,7 @@ export async function POST(req: NextRequest) {
         persona: PERSONA_SPECS[DEFAULT_PERSONA].display,
         ok: Boolean(autoReply),
         message: autoReplyError,
+        search: autoReplySearch,
       },
     },
     { status: 201 },

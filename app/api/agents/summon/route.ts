@@ -3,6 +3,7 @@ import { addComment, createPost, getPost, PERSONAS } from "@/lib/store";
 import {
   DEFAULT_PERSONA,
   GEMINI_MODELS,
+  GOOGLE_SEARCH_ENABLED,
   PERSONA_KEYS,
   PERSONA_SPECS,
   PersonaKey,
@@ -19,6 +20,7 @@ export async function GET() {
     ok: true,
     geminiConfigured: hasGeminiKey(),
     models: GEMINI_MODELS,
+    googleSearch: GOOGLE_SEARCH_ENABLED,
     defaultPersona: DEFAULT_PERSONA,
     personas: PERSONA_KEYS.map((key) => ({
       key,
@@ -102,6 +104,7 @@ export async function POST(req: NextRequest) {
       message: `${author.name} 가 댓글을 남겼습니다.`,
       comment: saved.comment,
       commentCount: saved.post.comments.length,
+      search: result.search,
     });
   }
 
@@ -130,5 +133,6 @@ export async function POST(req: NextRequest) {
       dislikes: post.dislikes,
       commentCount: 0,
     },
+    search: result.search,
   });
 }

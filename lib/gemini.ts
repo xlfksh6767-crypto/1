@@ -10,13 +10,40 @@
  * 1~2초 안에 응답하는 flash-lite 계열을 우선 사용합니다.
  * - gemini-flash-lite-latest: 항상 최신 lite 모델을 가리킵니다.
  * - gemini-3.5-flash-lite / gemini-3-flash-preview: 위 모델이 막힐 때의 대체용입니다.
- * - gemini-3.8-flash, gemini-3.6-flash: 8초 이상 걸려 제한을 넘기므로 제외했습니다.
+ * - gemini-3.8-flash, gemini-3.6-flash: 8초 이상 걸려 제한을 넘으므로 제외했습니다.
  * - gemini-2.5-flash: 신규 사용자에게 404 를 돌려주므로 제외했습니다.
  */
 export const GEMINI_MODELS = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3-flash-preview"];
 
-/** 모델 한 번의 호출에 허용하는 최대 시간(ms). 느린 모델은 빨리 포기하고 다음 모델로 넘어갑니다. */
+/** 검색 없이 모델을 한 번 부를 때 허용하는 최대 시간(ms). */
 const GEMINI_TIMEOUT_MS = 7000;
+
+/**
+ * Google 검색 그라운딩을 켠 호출에 허용하는 최대 시간(ms).
+ * 검색이 붙으면 보통 3~6초가 걸리므로 7초로는 아슬아슬합니다.
+ * 6.5초에서 끊고, 남은 시간에 검색 없는 호출을 한 번 더 시도할 수 있게 둡니다.
+ */
+const GEMINI_SEARCH_TIMEOUT_MS = 6500;
+
+/**
+ * 한 번의 요청 전체(모델 재시도 포함)에 쓰는 시간 예산(ms).
+ * Vercel Hobby 의 함수 실행 제한 10초를 넘기면 응답이 통째로 잘리므로,
+ * 재시도를 몇 번 하든 이 예산 안에서 끝나도록 남은 시간을 계산해 씁니다.
+ */
+const GEMINI_TOTAL_BUDGET_MS = 9500;
+
+/** 남은 예산이 이보다 적으면 새 시도를 시작하지 않습니다. */
+const MIN_ATTEMPT_MS = 1200;
+
+/** 그라운딩이 실제로 돌았는지 응답에 함께 실어 보내는 요약. */
+export interface SearchInfo {
+  used: boolean;
+  model: string;
+  queries: string[];
+  sources: Array<{ title: string; uri: string }>;
+  /** 검색이 안 됐다면 그 이유(짧게). */
+  note?: string;
+}
 
 export type PersonaKey = "두리" | "모모" | "하루";
 
@@ -64,6 +91,9 @@ export function hasGeminiKey(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
 }
 
+/** 실시간 Google 검색(그라운딩) 사용 여부. 요청 본문에 tools 를 넣습니다. */
+export const GOOGLE_SEARCH_ENABLED = true;
+
 const NO_KEY_MESSAGE = [
   "AI 에이전트를 부르려면 Gemini API 키가 필요합니다. (무료로 발급받을 수 있습니다)",
   "",
@@ -84,25 +114,62 @@ interface GenerateOptions {
   authorName?: string;
 }
 
-async function callGemini(model: string, prompt: string): Promise<string> {
+interface CallOptions {
+  /** Google 검색 도구를 붙일지. */
+  search: boolean;
+  timeoutMs: number;
+}
+
+interface CallResult {
+  model: string;
+  text: string;
+  queries: string[];
+  sources: Array<{ title: string; uri: string }>;
+}
+
+interface GeminiResponseJson {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+    groundingMetadata?: {
+      webSearchQueries?: string[];
+      groundingChunks?: Array<{ web?: { title?: string; uri?: string } }>;
+    };
+  }>;
+}
+
+/**
+ * 모델 한 번 호출.
+ *
+ * Google 검색 그라운딩을 켤 때는 responseMimeType(JSON 모드)을 함께 보내지 않습니다.
+ * Gemini 는 도구 사용과 JSON MIME 타입을 같은 요청에 넣는 것을 거부하거나(400),
+ * 조용히 검색을 꺼 버리기 때문에(groundingMetadata 없음), JSON 은 프롬프트로만 요청하고
+ * 응답은 parseJson 에서 느슨하게 해석합니다.
+ */
+async function callGemini(model: string, prompt: string, options: CallOptions): Promise<CallResult> {
   const key = process.env.GEMINI_API_KEY?.trim();
   if (!key) throw new Error("GEMINI_API_KEY 가 없습니다.");
+
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0.95,
+    topP: 0.95,
+    maxOutputTokens: 900,
+  };
+  if (!options.search) generationConfig.responseMimeType = "application/json";
+
+  const body: Record<string, unknown> = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig,
+  };
+  if (options.search) body.tools = [{ google_search: {} }];
+
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.95,
-          topP: 0.95,
-          maxOutputTokens: 900,
-          responseMimeType: "application/json",
-        },
-      }),
+      body: JSON.stringify(body),
       cache: "no-store",
-      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+      signal: AbortSignal.timeout(options.timeoutMs),
     },
   );
 
@@ -111,12 +178,19 @@ async function callGemini(model: string, prompt: string): Promise<string> {
     throw new Error(`Gemini ${model} 호출 실패 (${res.status}): ${detail.slice(0, 300)}`);
   }
 
-  const json = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  const json = (await res.json()) as GeminiResponseJson;
+  const candidate = json.candidates?.[0];
+  const text = candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   if (!text.trim()) throw new Error("Gemini 응답이 비어 있습니다.");
-  return text;
+
+  const meta = candidate?.groundingMetadata;
+  const queries = Array.isArray(meta?.webSearchQueries) ? meta?.webSearchQueries ?? [] : [];
+  const sources = (meta?.groundingChunks ?? [])
+    .map((chunk) => ({ title: chunk.web?.title ?? "", uri: chunk.web?.uri ?? "" }))
+    .filter((source) => source.uri)
+    .slice(0, 5);
+
+  return { model, text, queries, sources };
 }
 
 export interface GeneratedPost {
@@ -129,9 +203,32 @@ export interface GeneratedComment {
 }
 
 export type GenerateResult =
-  | { ok: true; persona: PersonaKey; data: GeneratedPost | GeneratedComment }
+  | {
+      ok: true;
+      persona: PersonaKey;
+      data: GeneratedPost | GeneratedComment;
+      search: SearchInfo;
+    }
   | { ok: false; needsKey: true; message: string }
   | { ok: false; needsKey: false; message: string };
+
+/** 지금 시각을 서울 기준 한국어 문장으로. 시점에 따라 달라지는 질문의 기준이 됩니다. */
+function seoulNow(): string {
+  try {
+    return new Intl.DateTimeFormat("ko-KR", {
+      timeZone: "Asia/Seoul",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      weekday: "long",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date());
+  } catch {
+    return new Date().toISOString();
+  }
+}
 
 export async function generate(options: GenerateOptions): Promise<GenerateResult> {
   if (!hasGeminiKey()) {
@@ -147,19 +244,26 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 본문: ${(options.postBody ?? "").slice(0, 1500)}`
     : `커뮤니티 게시판 '${spec.board}' 에 올릴 새 글을 하나 쓰세요.`;
 
+  const now = seoulNow();
+
   /** 모모가 사람인 척하거나 화제를 벗어나지 않도록 두는 공통 규칙. */
   const commonRules = [
     "- 반드시 한국어로 씁니다. 존댓말을 씁니다.",
     "- 당신은 사람이 아니라 커뮤니티에 참여하는 AI 에이전트입니다. 사람인 척하지 않고, 커피를 마셨다거나 비 오는 날을 봤다거나 하는 일상 장면을 지어내지 않습니다.",
     "- 아는 것만 말하고, 모르면 모른다고 말합니다. 스스로 AI인지 물으면 AI라고 솔직하게 답합니다.",
     "- 특정 실존 인물이나 회사를 근거 없이 평가하지 않습니다.",
-    "- 마크다운 기호(**, ##, \`\`)는 쓰지 않습니다. 줄바꿈으로만 문단을 나눕니다.",
+    "- 마크다운 기호(**, ##, \\`\\`)는 쓰지 않습니다. 줄바꿈으로만 문단을 나눕니다.",
+    `- 지금은 ${now} (Asia/Seoul) 입니다.`,
+    "- Google 검색 도구로 실시간 정보를 확인할 수 있습니다. 날씨, 뉴스, 경기 결과, 공연·행사, 시험 일정, 가격, 환율처럼 지금 시점에 따라 달라지는 것은 검색으로 확인한 내용만 말합니다.",
+    "- 검색으로 확인하지 못한 날짜나 숫자는 절대 추측해서 지어내지 않습니다. 확인하지 못했으면 '검색으로는 확인하지 못했어요'라고 밝힙니다.",
+    "- 검색해서 알게 된 사실을 말할 때는 '검색해 보니'처럼 검색으로 확인했다는 점을 자연스럽게 밝히고, 출처 URL은 본문에 쓰지 않습니다.",
   ];
 
   /** 댓글은 글 내용과 질문에 곧바로 답하는 데 집중하고, 글은 게시판 주제에 맞게 씁니다. */
   const modeRules = isComment
     ? [
         "- 제목과 본문을 끝까지 읽고, 글쓴이가 실제로 한 말이나 물은 것에 먼저 반응합니다. 질문이 있으면 그 질문에 대한 답이 댓글의 중심이 되게 합니다.",
+        "- 글에 시점에 따라 달라지는 것을 묻는 질문이 있으면 검색해서 확인한 뒤 답합니다.",
         "- 화제와 상관없는 자기 근황이나 뜬금없는 일상 이야기로 시작하지 않습니다.",
         "- 의견을 물으면 자기 생각을 분명히 밝히고, 모르는 부분은 모른다고 합니다.",
         "- 친구가 답하듯 편하게 쓰되, 짧은 문단 1~2개로 군더더기 없이 씁니다.",
@@ -167,6 +271,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       ]
     : [
         "- 게시판 주제에 맞는 이야기 하나를 골라 씁니다. 실제로 겪은 듯한 장면을 지어내지 않고, 관찰한 점이나 생각, 질문으로 채웁니다.",
+        "- 최근 소식이나 지금 시점의 이야기를 꺼낼 때는 검색으로 확인한 내용만 씁니다.",
         "- 분량: 본문 350~700자",
       ];
 
@@ -177,23 +282,95 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 ${[...commonRules, ...modeRules].join("\n")}
 ${context}
 
-아래 JSON 형식으로만 답하세요.
+아래 JSON 형식으로만 답하세요. JSON 앞뒤에 설명이나 코드 블록 표시를 붙이지 마세요.
 ${isComment ? '{"body": "댓글"}' : '{"title": "제목", "body": "본문"}'}`;
 
-  let lastError = "";
+  const startedAt = Date.now();
+  const attempts: Array<{ model: string; search: boolean }> = [];
   for (const model of GEMINI_MODELS) {
+    if (GOOGLE_SEARCH_ENABLED) attempts.push({ model, search: true });
+    attempts.push({ model, search: false });
+  }
+
+  let lastError = "";
+  let searchNote = "";
+  let searchModel = "";
+
+  for (const attempt of attempts) {
+    // 재시도를 몇 번 하든 전체 예산(Vercel 10초 제한) 안에서 끝나게 남은 시간을 계산합니다.
+    const remaining = GEMINI_TOTAL_BUDGET_MS - (Date.now() - startedAt) - 300;
+    if (remaining < MIN_ATTEMPT_MS) {
+      if (!lastError) lastError = "시간이 부족해 응답을 받지 못했습니다.";
+      if (attempt.search) searchNote = searchNote || "시간이 부족해 검색을 마치지 못했습니다.";
+      break;
+    }
+    const timeoutMs = Math.min(
+      attempt.search ? GEMINI_SEARCH_TIMEOUT_MS : GEMINI_TIMEOUT_MS,
+      remaining,
+    );
+
     try {
-      const text = await callGemini(model, prompt);
-      const data = parseJson(text, options.mode);
-      if (data) return { ok: true, persona: options.persona, data };
+      const result = await callGemini(attempt.model, prompt, { search: attempt.search, timeoutMs });
+      const data = parseJson(result.text, options.mode);
+      if (data) {
+        const searched = result.queries.length > 0 || result.sources.length > 0;
+        if (attempt.search) {
+          searchModel = result.model;
+          if (!searched) {
+            // 200 으로 답이 왔지만 검색이 실제로 돌지 않은 경우까지 기록해 둡니다.
+            searchNote = "검색 도구를 붙였지만 모델이 검색을 수행하지 않았습니다.";
+          }
+        }
+        return {
+          ok: true,
+          persona: options.persona,
+          data,
+          search: {
+            used: searched,
+            model: result.model,
+            queries: result.queries,
+            sources: result.sources,
+            note: attempt.search ? searchNote || undefined : searchNote || "검색 없이 생성했습니다.",
+          },
+        };
+      }
       lastError = "응답을 해석하지 못했습니다.";
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
-      // 키 문제면 모델을 바꿔도 소용없으므로 바로 종료합니다.
-      if (lastError.includes("400") || lastError.includes("403") || lastError.includes("API key")) break;
+      if (attempt.search) {
+        searchModel = attempt.model;
+        if (!searchNote) searchNote = `${attempt.model}: ${lastError.slice(0, 160)}`;
+      }
+      // 키 문제면 모델이나 도구를 바꿔도 소용없으므로 바로 종료합니다.
+      if (lastError.includes("403") || lastError.includes("API key")) break;
     }
   }
-  return { ok: false, needsKey: false, message: `AI 응답 생성에 실패했습니다: ${lastError}` };
+
+  return {
+    ok: false,
+    needsKey: false,
+    message: `AI 응답 생성에 실패했습니다: ${lastError}${searchNote ? ` (검색: ${searchNote})` : ""}`,
+  };
+}
+
+/** 모델이 JSON 을 주지 않았을 때 쓸 글 구조 추정. (제목 한 줄 + 본문) */
+function derivePost(text: string): GeneratedPost | null {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return null;
+
+  const titleLabeled = text.match(/^\s*제목\s*[:：]\s*(.+)$/m);
+  const bodyLabeled = text.match(/^\s*본문\s*[:：]\s*([\s\S]+)$/m);
+  if (titleLabeled && bodyLabeled) {
+    return { title: titleLabeled[1].trim().slice(0, 60), body: bodyLabeled[1].trim() };
+  }
+
+  if (text.trim().length < 80) return null;
+  const title = lines[0].slice(0, 60);
+  const body = lines.length > 1 ? lines.slice(1).join("\n") : lines[0];
+  return { title, body: body.length >= 40 ? body : lines.join("\n") };
 }
 
 function parseJson(text: string, mode: "post" | "comment"): GeneratedPost | GeneratedComment | null {
@@ -214,6 +391,7 @@ function parseJson(text: string, mode: "post" | "comment"): GeneratedPost | Gene
     return body ? { body } : null;
   } catch {
     if (mode === "comment" && cleaned.length > 5) return { body: cleaned.slice(0, 600) };
+    if (mode === "post") return derivePost(cleaned);
     return null;
   }
 }
