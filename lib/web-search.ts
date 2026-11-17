@@ -465,17 +465,69 @@ async function fetchNewsRss(query: string, timeoutMs: number): Promise<string> {
   );
 }
 
+/** 구글 뉴스는 질문 문장을 그대로 주면 결과가 거의 없습니다. 핵심 낱말만 남깁니다. */
+const NEWS_STOPWORDS = [
+  "요즘",
+  "요새",
+  "중에",
+  "관련",
+  "대해",
+  "대한",
+  "무슨",
+  "어떤",
+  "뭐가",
+  "있어요",
+  "있나요",
+  "있을까요",
+  "알려주세요",
+  "알려줘",
+  "궁금합니다",
+  "궁금해요",
+  "화제인",
+  "화제가",
+  "어때요",
+  "주세요",
+  "그리고",
+  "혹시",
+  "제가",
+];
+
+function simplifyNewsQuery(query: string): string {
+  let text = query.replace(/[?？!~,.'"()]/g, " ");
+  for (const word of NEWS_STOPWORDS) text = text.split(word).join(" ");
+  text = text.replace(/\s+/g, " ").trim();
+  return text.slice(0, 40);
+}
+
 async function tryNewsRss(query: string, timeoutMs: number): Promise<SourceOutcome> {
+  const startedAt = Date.now();
+  const simplified = simplifyNewsQuery(query);
+  const tokens = simplified.split(" ").filter(Boolean);
+  const candidates = [simplified, tokens.slice(0, 2).join(" ")].filter(
+    (candidate, index, list) => candidate.length >= 2 && list.indexOf(candidate) === index,
+  );
+  if (!candidates.length) candidates.push(query.slice(0, 30));
+
   const notes: string[] = [];
-  // 최근 일주일 기사만 먼저 찾고, 없거나 실패하면 기간 제한 없이 다시 찾습니다.
-  for (const searchQuery of [`${query} when:7d`, query]) {
-    try {
-      const xml = await fetchNewsRss(searchQuery, timeoutMs);
-      const hits = cleanHits(parseNewsRss(xml, searchQuery.endsWith("when:7d") ? 8 : undefined));
-      if (hits.length) return { provider: "google-news", hits, note: notes.length ? notes.join(" / ") : undefined };
-      notes.push("google-news: 결과 없음");
-    } catch (err) {
-      notes.push(`google-news: ${err instanceof Error ? err.message : String(err)}`);
+  for (const candidate of candidates) {
+    // 최근 일주일 기사만 먼저 찾고, 없으면 기간 제한 없이 찾습니다.
+    for (const withWindow of [true, false]) {
+      const remaining = SEARCH_TOTAL_TIMEOUT_MS - (Date.now() - startedAt) - 200;
+      if (remaining < 600) {
+        notes.push("google-news: 시간이 부족해 중단");
+        return { provider: "google-news", hits: [], note: notes.join(" / ").slice(0, 160) };
+      }
+      const searchQuery = withWindow ? `${candidate} when:7d` : candidate;
+      try {
+        const xml = await fetchNewsRss(searchQuery, Math.min(timeoutMs, remaining));
+        const hits = cleanHits(parseNewsRss(xml, withWindow ? 8 : undefined));
+        if (hits.length) {
+          return { provider: "google-news", hits, note: notes.length ? notes.join(" / ").slice(0, 120) : undefined };
+        }
+        notes.push(`google-news(${candidate.slice(0, 12)}): 결과 없음`);
+      } catch (err) {
+        notes.push(`google-news: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
   return { provider: "google-news", hits: [], note: notes.join(" / ").slice(0, 160) };
