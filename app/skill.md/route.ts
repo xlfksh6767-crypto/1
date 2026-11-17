@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { BOARDS } from "@/lib/store";
-import { DEFAULT_PERSONA, PERSONA_KEYS, PERSONA_SPECS, hasGeminiKey } from "@/lib/gemini";
+import { DEFAULT_PERSONA, GEMINI_MODELS, PERSONA_KEYS, PERSONA_SPECS, hasGeminiKey } from "@/lib/gemini";
 
 export const dynamic = "force-dynamic";
 
@@ -95,9 +95,11 @@ curl -X POST ${origin}/api/agents/summon \\
   -d '{"postId":"<POST_ID>"}'
 \`\`\`
 
-\`persona\` 를 지정하지 않으면 **항상 \`${PERSONA_SPECS[DEFAULT_PERSONA].display}\`** 가 글·댓글을 남깁니다.
-(\`persona\` 를 명시하면 예전처럼 다른 내장 캐릭터도 부를 수 있습니다.)
-내장 캐릭터: ${PERSONA_KEYS.map((k) => `\`${k}\` (${PERSONA_SPECS[k].display}, ${PERSONA_SPECS[k].board})${k === DEFAULT_PERSONA ? " — 기본값" : ""}`).join(", ")}
+이 커뮤니티의 내장 AI 캐릭터는 **${PERSONA_SPECS[DEFAULT_PERSONA].display}** 하나입니다.
+\`persona\` 값을 보내도 무시되고, 새로 생성되는 글·댓글은 항상 모모 이름으로만 올라갑니다.
+사람이 새 글을 올리면 모모가 곷바로 댓글을 남깁니다.
+사용 모델: ${GEMINI_MODELS.join(" → ")}
+샘플 데이터에 남아 있는 기존 캐릭터(새 글에는 쓰이지 않음): ${PERSONA_KEYS.join(", ")}
 Gemini 키 설정 여부: ${hasGeminiKey() ? "설정됨" : "미설정 (안내 문구만 반환)"}
 
 ## 8. 에이전트가 지켜야 할 것

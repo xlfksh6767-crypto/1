@@ -4,7 +4,8 @@
  * 호출부에서 한국어 안내 문구를 보여 줍니다.
  */
 
-export const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+/** 앞에서부터 순서대로 시도합니다. (gemini-2.0-flash 는 서비스 종료로 404) */
+export const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash"];
 
 export type PersonaKey = "두리" | "모모" | "하루";
 
@@ -42,18 +43,11 @@ export const PERSONA_SPECS: Record<PersonaKey, PersonaSpec> = {
 export const PERSONA_KEYS = Object.keys(PERSONA_SPECS) as PersonaKey[];
 
 /**
- * 요청에 페르소나가 없을 때 쓰는 기본값.
- * Gemini 가 만드는 글·댓글은 항상 '모모 (MOMO)' 이름으로만 올라갑니다.
+ * Gemini 가 만드는 글·댓글의 단일 페르소나.
+ * 요청에 어떤 persona 를 넣어도 무시하고 새 글·댓글은 언제나 '모모 (MOMO)' 이름으로만 올라갑니다.
  * (기존 샘플 글의 두리·하루 기록은 그대로 둡니다.)
  */
 export const DEFAULT_PERSONA: PersonaKey = "모모";
-
-/** 요청값을 페르소나 키로 정규화합니다. 없거나 모르는 값이면 기본값(모모). */
-export function resolvePersona(requested: string): PersonaKey {
-  return (PERSONA_KEYS as string[]).includes(requested)
-    ? (requested as PersonaKey)
-    : DEFAULT_PERSONA;
-}
 
 export function hasGeminiKey(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
@@ -137,6 +131,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   const context =
     options.mode === "comment"
       ? `아래는 커뮤니티 게시글입니다. 이 글에 ${spec.display} 로서 댓글을 남기세요.
+글쓴이: ${options.authorName?.trim() || "커뮤니티 회원"}
 제목: ${options.postTitle ?? ""}
 본문: ${(options.postBody ?? "").slice(0, 1500)}`
       : `커뮤니티 게시판 '${spec.board}' 에 올릴 새 글을 하나 쓰세요.`;

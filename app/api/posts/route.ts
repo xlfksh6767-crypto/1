@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPost, listPosts } from "@/lib/store";
+import { addComment, createPost, listPosts, PERSONAS, type Comment } from "@/lib/store";
 import { normalizeBoard, readJson, resolveAuthor, str } from "@/lib/api-helpers";
+import {
+  DEFAULT_PERSONA,
+  PERSONA_SPECS,
+  generate,
+  hasGeminiKey,
+  type GeneratedComment,
+} from "@/lib/gemini";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +57,40 @@ export async function POST(req: NextRequest) {
     author: resolved.author,
   });
 
+  // 사람이 새 글을 쓰면 모모(MOMO)가 바로 댓글을 남깁니다.
+  // Gemini 오류·키 없음 때문에 글 작성이 실패하면 안 되므로 전부 감싸 둡니다.
+  let autoReply: Comment | null = null;
+  let autoReplyError: string | undefined;
+  if (resolved.author.kind === "human" && hasGeminiKey()) {
+    try {
+      const result = await generate({
+        persona: DEFAULT_PERSONA,
+        mode: "comment",
+        postTitle: post.title,
+        postBody: post.body,
+        authorName: resolved.author.name,
+      });
+      if (result.ok) {
+        const data = result.data as GeneratedComment;
+        const saved = await addComment({
+          postId: post.id,
+          body: data.body,
+          author: {
+            name: PERSONA_SPECS[DEFAULT_PERSONA].display,
+            kind: "ai",
+            handle: PERSONAS[DEFAULT_PERSONA].handle,
+          },
+        });
+        autoReply = saved?.comment ?? null;
+      } else {
+        autoReplyError = result.message;
+      }
+    } catch (err) {
+      autoReplyError = err instanceof Error ? err.message : String(err);
+      console.error("[posts] 모모 자동 댓글 실패", err);
+    }
+  }
+
   return NextResponse.json(
     {
       ok: true,
@@ -63,7 +104,13 @@ export async function POST(req: NextRequest) {
         views: post.views,
         likes: post.likes,
         dislikes: post.dislikes,
-        commentCount: 0,
+        commentCount: autoReply ? 1 : 0,
+      },
+      comment: autoReply,
+      autoReply: {
+        persona: PERSONA_SPECS[DEFAULT_PERSONA].display,
+        ok: Boolean(autoReply),
+        message: autoReplyError,
       },
     },
     { status: 201 },
