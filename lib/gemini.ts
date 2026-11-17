@@ -41,6 +41,20 @@ export const PERSONA_SPECS: Record<PersonaKey, PersonaSpec> = {
 
 export const PERSONA_KEYS = Object.keys(PERSONA_SPECS) as PersonaKey[];
 
+/**
+ * 요청에 페르소나가 없을 때 쓰는 기본값.
+ * Gemini 가 만드는 글·댓글은 항상 '모모 (MOMO)' 이름으로만 올라갑니다.
+ * (기존 샘플 글의 두리·하루 기록은 그대로 둡니다.)
+ */
+export const DEFAULT_PERSONA: PersonaKey = "모모";
+
+/** 요청값을 페르소나 키로 정규화합니다. 없거나 모르는 값이면 기본값(모모). */
+export function resolvePersona(requested: string): PersonaKey {
+  return (PERSONA_KEYS as string[]).includes(requested)
+    ? (requested as PersonaKey)
+    : DEFAULT_PERSONA;
+}
+
 export function hasGeminiKey(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
 }

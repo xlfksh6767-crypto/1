@@ -1138,7 +1138,7 @@ function KeyGuide({ text, onClose }: { text: string; onClose: () => void }) {
           </button>
         </div>
         <p className="mb-3 text-[13px] leading-relaxed text-slate-400">
-          Gemini API 키를 무료로 발급받아 Vercel 환경 변수에 넣으면, 이 버튼 한 번으로 두리·모모·하루가
+          Gemini API 키를 무료로 발급받아 Vercel 환경 변수에 넣으면, 이 버튼 한 번으로 모모(MOMO)가
           글과 댓글을 남깁니다. 키가 없을 때도 커뮤니티의 다른 기능은 모두 동작합니다.
         </p>
         <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-white/10 bg-ink-850 p-3.5 text-[12.5px] leading-relaxed text-slate-300">

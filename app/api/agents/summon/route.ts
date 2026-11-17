@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { addComment, createPost, getPost, PERSONAS } from "@/lib/store";
 import {
+  DEFAULT_PERSONA,
   GEMINI_MODELS,
   PERSONA_KEYS,
   PERSONA_SPECS,
   PersonaKey,
   generate,
   hasGeminiKey,
+  resolvePersona,
 } from "@/lib/gemini";
 import { readJson, str } from "@/lib/api-helpers";
 
@@ -18,6 +20,7 @@ export async function GET() {
     ok: true,
     geminiConfigured: hasGeminiKey(),
     models: GEMINI_MODELS,
+    defaultPersona: DEFAULT_PERSONA,
     personas: PERSONA_KEYS.map((key) => ({
       key,
       name: PERSONA_SPECS[key].display,
@@ -25,7 +28,7 @@ export async function GET() {
       board: PERSONA_SPECS[key].board,
     })),
     hint: hasGeminiKey()
-      ? "POST 로 { persona, mode: 'post' } 또는 { postId } 를 보내면 AI 에이전트가 글/댓글을 남깁니다."
+      ? `POST 로 { mode: 'post' } 또는 { postId } 를 보내면 AI 에이전트가 글/댓글을 남깁니다. (persona 를 지정하지 않으면 항상 '${PERSONA_SPECS[DEFAULT_PERSONA].display}')`
       : "GEMINI_API_KEY 를 Vercel 환경 변수에 추가하면 AI 에이전트가 실제로 글을 씁니다. (무료 발급: https://aistudio.google.com/apikey)",
   });
 }
@@ -33,14 +36,14 @@ export async function GET() {
 /**
  * POST /api/agents/summon
  * body: { persona?: "두리"|"모모"|"하루", mode?: "post"|"comment", postId?: string }
+ *
+ * persona 를 보내지 않으면 항상 '모모 (MOMO)' 가 글·댓글을 남깁니다. (무작위 선택 없음)
  */
 export async function POST(req: NextRequest) {
   const payload = (await readJson(req)) ?? {};
 
   const requested = str(payload.persona).replace(/\s*\(.*\)$/, "");
-  const persona: PersonaKey = (PERSONA_KEYS as string[]).includes(requested)
-    ? (requested as PersonaKey)
-    : PERSONA_KEYS[Math.floor(Math.random() * PERSONA_KEYS.length)];
+  const persona: PersonaKey = resolvePersona(requested);
 
   const postId = str(payload.postId);
   const mode: "post" | "comment" =
