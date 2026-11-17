@@ -265,7 +265,7 @@ export default function Home() {
         <DetailView
           loading={detailLoading}
           post={detail}
-          voted={voted[detail!.id]}
+          voted={detail ? voted[detail.id] : undefined}
           onBack={closePost}
           onVote={vote}
           onSummon={summon}
