@@ -56,6 +56,7 @@ export async function GET(req: NextRequest) {
         bytes: text.length,
         contentType: res.headers.get("content-type"),
         head: text.slice(0, 260).replace(/\s+/g, " "),
+        full: req.nextUrl.searchParams.get("full") === "1" && text.length < 20000 ? text : undefined,
       });
     } catch (err) {
       results.push({ name: t.name, status: "error", ms: Date.now() - started, error: String(err).slice(0, 200) });
